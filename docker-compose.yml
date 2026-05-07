@@ -1,0 +1,77 @@
+version: "3.9"
+
+services:
+  # ─────────────────────────────────────────
+  # Broker MQTT (Mosquitto)
+  # ─────────────────────────────────────────
+  broker:
+    image: eclipse-mosquitto:2
+    container_name: mqtt_broker
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./broker/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/#' -C 1 -i healthcheck --quiet"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # Subscriber (nuestro sistema HU_03)
+  # ─────────────────────────────────────────
+  subscriber:
+    build:
+      context: ./subscriber
+      dockerfile: Dockerfile
+    container_name: mqtt_subscriber
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      BROKER_HOST: broker
+      BROKER_PORT: 1883
+      TOPIC: "axon/mensajes/#"
+      QOS: 1
+      CLIENT_ID: "subscriber_hu03"
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # Publisher de prueba (manual)
+  # Uso: docker-compose run --rm publisher
+  # ─────────────────────────────────────────
+  publisher:
+    image: eclipse-mosquitto:2
+    container_name: mqtt_publisher_test
+    depends_on:
+      broker:
+        condition: service_healthy
+    entrypoint: >
+      mosquitto_pub
+        -h broker
+        -t axon/mensajes/test
+        -m '{"id":"msg001","categoria":"test","contenido":"Hola desde publisher","timestamp":"2026-05-06T12:00:00"}'
+        -q 1
+    profiles:
+      - manual
+
+  # ─────────────────────────────────────────
+  # Runner de tests
+  # Uso: docker-compose run --rm tests
+  # ─────────────────────────────────────────
+  tests:
+    build:
+      context: ./subscriber
+      dockerfile: Dockerfile
+    container_name: mqtt_tests
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      BROKER_HOST: broker
+      BROKER_PORT: 1883
+      TOPIC: "axon/mensajes/#"
+      QOS: 1
+    command: ["pytest", "tests/", "-v", "--tb=short", "--cov=src", "--cov-report=term-missing"]
+    profiles:
+      - test
